@@ -28,9 +28,15 @@ scRNAlist <- list()
 
 for(i in 1:length(dir)) {
   counts <- Read10X(data.dir = dir[i], gene.column = 1)  # 读取数据
-  scRNAlist[[i]] <- CreateSeuratObject(counts, project=sample_name[i])
+  scRNAlist[[i]] <- CreateSeuratObject(counts, project=sample_name[i], min.cells=3, min.features=200)
 }
-
+# 检查数据的一致性
+sapply(scRNAlist, function(obj) {
+  c(
+    nFeature = nrow(obj),
+    nCell    = ncol(obj)
+  )
+})
 
 #### 2.构建转换单细胞数据counts信息的函数------------------------------------------------------------------------------------------------------------------------------
 convert_ensembl_to_symbol <- function(seurat_obj) {
@@ -114,6 +120,34 @@ sapply(scRNAlist, function(obj) {
     nCell    = ncol(obj)
   )
 })
+
+# 对不同样本的features取交集
+# 取所有样本 RNA_symbol 的基因交集
+common_genes <- Reduce(
+  intersect,
+  lapply(scRNAlist, function(obj) {
+    rownames(GetAssayData(obj, assay = "RNA_symbol", layer = "counts"))
+  })
+)
+length(common_genes)  # 13468
+
+# 对每个对象 subset 到共同基因集
+scRNAlist <- lapply(scRNAlist, function(obj) {
+  # 取 RNA_symbol 的 counts
+  mat <- GetAssayData(obj, assay = "RNA_symbol", layer = "counts")
+  
+  # 只保留 common_genes
+  mat2 <- mat[common_genes, , drop = FALSE]
+  
+  # 重新写回 RNA_symbol（只保留 counts；后面你反正会 NormalizeData）
+  obj[["RNA_symbol"]] <- CreateAssayObject(counts = mat2)
+  DefaultAssay(obj) <- "RNA_symbol"
+  obj
+})
+
+# 检查统一后是否一致
+sapply(scRNAlist, function(obj) c(nFeature = nrow(obj), nCell = ncol(obj)))
+
 
 # 2️⃣ 依次保存每个 Seurat 对象
 for (i in seq_along(scRNAlist)) {
