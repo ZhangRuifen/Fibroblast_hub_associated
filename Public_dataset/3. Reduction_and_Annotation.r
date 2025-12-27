@@ -9,7 +9,6 @@ library(patchwork)
 setwd('G:/课题二 成纤维细胞相关/Results/Public data/Result/3.降维聚类')
 
 #### 1.降维聚类------------------------------------------------------------------------------------------------------------------------------
-
 DefaultAssay(scRNA)<-"RNA"
 scRNA[["RNA"]] <- split(scRNA[["RNA"]], f = scRNA$orig.ident)
 Layers(scRNA[["RNA"]])
@@ -51,11 +50,8 @@ a<-DimPlot(scRNA, reduction = "umap", group.by = c("RNA_snn_res.0.05","RNA_snn_r
                                                   "RNA_snn_res.0.3","RNA_snn_res.0.4","RNA_snn_res.0.5"))
 ggsave(a,file= 'umap.pdf',width = 15,height = 12)
 
-
 #### 2.注释------------------------------------------------------------------------------------------------------------------------------
-# 高变基因进行定义
 colnames(scRNA@meta.data)
-
 list_genes <- list(
   # Stem_cells = c('LGR5','ASCL2','SMOC2'),
   # TA = c('MKI67','UBE2C','TOP2A','PCNA'),
@@ -92,7 +88,6 @@ p<-DotPlot(scRNA,features = list_genes)+
   )
 p
 ggsave(plot=p,file="final.0.05.dotplot.pdf",width = 15,height = 3)
-
 
 ### 注释结果
 # 1.分辨率0.05：9个cluster
@@ -132,8 +127,31 @@ dotplot <- p +
   labs(x="", y="")
 ggsave(plot=dotplot,file="final_0.05.dotplot_红色.pdf",width = 13,height = 3.5)
 
+#### 3.添加样本信息------------------------------------------------------------------------------------------------------------------------------
+# ✅ 一、明确分组规则
+Healthy_CTRL <- c("GSM7307102", "GSM7307103", "GSM7307104", "GSM7307105")
+UC <- c("GSM7307098", "GSM7307099", "GSM7307100", "GSM7307101")
+Self_CTRL    <- c("GSM7307094", "GSM7307095", "GSM7307096", "GSM7307097")
 
-#### 3.定义细胞类型+可视化------------------------------------------------------------------------------------------------------------------------------
+# ✅ 二、在 Seurat 对象中新增分组列（推荐写法）
+scRNA$group <- NA
+scRNA$group[scRNA$orig.ident %in% Healthy_CTRL] <- "Healthy_CTRL"
+scRNA$group[scRNA$orig.ident %in% UC]      <- "UC"
+scRNA$group[scRNA$orig.ident %in% Self_CTRL]    <- "Self_CTRL"
+
+# ✅ 三、设定 factor 顺序（非常重要）
+scRNA$group <- factor(
+  scRNA$group,
+  levels = c("Healthy_CTRL", "UC", "Self_CTRL"))
+
+# ✅ 四、检查是否正确分组
+table(scRNA$group)
+table(scRNA$orig.ident, scRNA$group)
+
+# ✅ 五、后续常见用法示例
+DimPlot(scRNA, split.by = "group", label = TRUE)
+
+#### 4.定义细胞类型+可视化------------------------------------------------------------------------------------------------------------------------------
 # 1.建立cluster→celltype的映射表
 cluster2type <- c(
   "0" = "T_cells",
