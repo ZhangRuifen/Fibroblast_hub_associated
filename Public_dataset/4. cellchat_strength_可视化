@@ -1,0 +1,122 @@
+#### 20251228 对Cellchat结果中所有细胞在炎症前后不同细胞发出信号进行定量（Fibroblast）
+
+#### 一、cellchat------------------------------------------------------------------------------------------------------------------------------
+#### 1.GSE231993------------------------------------------------------------------------------------------------------------------------------
+setwd('G:/课题二 成纤维细胞相关/Results/Public data/Result/GSE231993/3.Cellchat')
+# 1.读入数据
+cellchat_Healthy_CTRL <- readRDS("./Healthy_CTRL_CellChat.rds")
+cellchat_UC <- readRDS("./UC_CellChat.rds")
+cellchat_Self_CTRL <- readRDS("./Self_CTRL_CellChat.rds")
+
+object.list <- list(Healthy_CTRL = cellchat_Healthy_CTRL, 
+                    cellchat_UC = cellchat_UC, 
+                    Self_CTRL = cellchat_Self_CTRL)
+cellchat <- mergeCellChat(object.list, add.names = names(object.list))
+cellchat
+
+#### 2.提取数据 ####
+# A.weight
+weight_d0<-cellchat_Healthy_CTRL@net$weight
+weight_d1<-cellchat_UC@net$weight
+weight_d3<-cellchat_Self_CTRL@net$weight
+
+weight_list<-list(weight_d0,weight_d1,weight_d3)
+names(weight_list)<-c("Healthy_CTRL","UC","Self_CTRL")
+
+# B.number
+weight_d0<-cellchat_Healthy_CTRL@net$count
+weight_d1<-cellchat_UC@net$count
+weight_d3<-cellchat_Self_CTRL@net$count
+
+weight_list<-list(weight_d0,weight_d1,weight_d3)
+names(weight_list)<-c("Healthy_CTRL","UC","Self_CTRL")
+
+# C.可视化
+# 行：发送方
+# 列：接收方
+# ✅  1.计算
+calc_strength <- function(weight_mat) {
+  diag(weight_mat) <- 0  # 去掉 self–self
+  rowSums(weight_mat, na.rm = TRUE)
+}
+
+# ✅  2.整理成一个 tidy data.frame
+outgoing_df <- do.call(rbind, lapply(names(weight_list), function(cond) {
+  w <- weight_list[[cond]]
+  data.frame(
+    celltype = rownames(w),
+    strength = calc_strength(w),
+    condition = cond,
+    row.names = NULL
+  )
+}))
+
+# ✅  3.如果你想按「强度排序」再画
+# 设定绘图顺序
+palette_celltype <-  c(
+  'Epithelial' = "#1F77B4",  # Epithelial - 深蓝
+  'T_cells' = "#D62728",  # T_cells - 鲜红
+  'B_cells' = "#17BECF",  # B_cells - 绿色
+  'Plasma' = "#9467BD",  # Plasma - 紫色
+  'Macrophage' = "#FF7F0E",  # Macrophage - 橙色
+  'Mast_cells' = "#E377C2",  # Mast_cells - 洋红
+  'Fibroblast' = "#8C564B",  # Fibroblast - 深棕
+  'Fibroblast_SPP1' = "#2CA02C",  # Fibroblast_SPP1 - 青蓝
+  'Endothelial' = "#BCBD22"   # Endothelial - 黄绿
+)
+
+outgoing_df$celltype <- factor(outgoing_df$celltype, levels = names(palette_celltype))
+
+conditions <- levels(factor(outgoing_df$condition, levels = c("Healthy_CTRL","UC","Self_CTRL")))
+colnames(outgoing_df)
+
+#### 可视化配受体对强度 ####(统一Y轴)
+y_breaks <- pretty(c(0, max(outgoing_df$strength, na.rm = TRUE)))
+y_max    <- max(y_breaks)
+
+plots <- lapply(conditions, function(d){
+  df <- outgoing_df %>% filter(condition == d) %>%
+    arrange(desc(strength)) %>%
+    mutate(celltype = factor(celltype, levels = celltype))  # 此处按当日降序重排
+  
+  ggplot(df, aes(x = celltype, y = strength, fill = celltype)) +
+    geom_col() +
+    scale_fill_manual(values = palette_celltype, guide = "none") +
+    scale_y_continuous(limits = c(0, y_max), breaks = y_breaks, expand = expansion(mult = c(0, .02))) +
+    labs(x = NULL, y = "Outgoing interaction strength",
+         title = paste0(d, " — outgoing strength")) +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+})
+
+## 5.存图
+fn_pdf <- file.path("./可视化/strength_all_conditions.pdf")
+pdf(fn_pdf, width = 4, height = 3)
+for (p in plots) print(p)
+dev.off()
+
+#### 可视化配受体对个数 ####
+
+y_breaks <- pretty(c(0, max(outgoing_df$strength, na.rm = TRUE)))
+y_max    <- max(y_breaks)
+
+plots <- lapply(conditions, function(d){
+  df <- outgoing_df %>% filter(condition == d) %>%
+    arrange(desc(strength)) %>%
+    mutate(celltype = factor(celltype, levels = celltype))  # 此处按当日降序重排
+  
+  ggplot(df, aes(x = celltype, y = strength, fill = celltype)) +
+    geom_col() +
+    scale_fill_manual(values = palette_celltype, guide = "none") +
+    scale_y_continuous(limits = c(0, y_max), breaks = y_breaks, expand = expansion(mult = c(0, .02))) +
+    labs(x = NULL, y = "Outgoing interaction number",
+         title = paste0(d, " — outgoing number")) +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+})
+
+## 5.存图
+fn_pdf <- file.path("./可视化/number_all_conditions.pdf")
+pdf(fn_pdf, width = 4, height = 3)
+for (p in plots) print(p)
+dev.off()
