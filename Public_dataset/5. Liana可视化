@@ -1,0 +1,91 @@
+#### 20251229 使用UC数据运行的Liana结果可视化
+
+library(liana)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(SingleCellExperiment)
+library(Seurat)
+
+setwd('G:/课题二 成纤维细胞相关/Results/Public data/Result/UC/3.Liana')
+#### 二、Liana------------------------------------------------------------------------------------------------------------------------------
+# 可视化——热图
+liana_Healthy0 <- readRDS("./liana_Healthy.rds")
+liana_Healthy1 <- readRDS("./liana_Inflamed.rds")
+liana_Healthy3 <- readRDS("./liana_Uninflamed.rds")
+
+liana.list<-list(Healthy=liana_Healthy0 ,Inflamed=liana_Healthy1,
+                 Uninflamed=liana_Healthy3)
+
+
+#### 1.计算数据 ####
+# 1️⃣ 计算每天、每个细胞类型的发出/接收强度与配受体数
+cell_comm_summary <- map_dfr(names(liana.list), function(d) {
+  agg <- liana.list[[d]]$agg_consensus
+  sc  <- "consensus_mag"
+  # A.计算发出方
+  out_df <- agg %>%
+    group_by(sender = source) %>%  # 按照不同的source进行分组
+    summarise(
+      out_deg = n_distinct(paste0(ligand.complex, receptor.complex, target)), # 计算不同source靶向target配受体数
+      out_w   = sum(.data[[sc]], na.rm = TRUE), # 计算所有方法标准化后强度总和
+      .groups = "drop"
+    ) %>% mutate(direction = "Outgoing")
+  glimpse(out_df)
+  
+  # B.计算接收方
+  in_df <- agg %>%
+    group_by(sender = target) %>%  
+    summarise(
+      in_deg = n_distinct(paste0(source, ligand.complex, receptor.complex)),
+      in_w   = sum(.data[[sc]], na.rm = TRUE),
+      .groups = "drop"
+    ) %>% 
+    mutate(direction = "Incoming")
+  
+  # 合并发出和接收
+  full_join(out_df, in_df, by = "sender", suffix = c(".out", ".in")) %>%
+    mutate(Healthy = d)
+})
+colnames(cell_comm_summary)[1] <- "CellType"
+
+#### 2.可视化 ####
+heat_df <- cell_comm_summary %>%
+  mutate(total_strength = out_w + in_w) %>%
+  select(Healthy, CellType, total_strength)
+
+
+### 补全所有
+# Healthy 列可能是字符类型，先确保排序
+heat_df$Healthy <- factor(heat_df$Healthy, levels = c("Healthy","Uninflamed","Inflamed"))
+
+# 找出所有可能的组合
+heat_df_complete <- heat_df %>%
+  complete(
+    Healthy,
+    CellType,
+    fill = list(total_strength = NA)  # 没通信的设为 NA
+  )
+
+c<-ggplot(heat_df_complete, aes(x = Healthy, y = fct_rev(CellType), fill = total_strength)) +
+  geom_tile(color="grey90") +
+  scale_fill_gradient2(
+    low = "#1F78B4", mid = "#F5F5F5", high = "#E66101",
+    midpoint = 0, na.value = "grey80"   # 👈 NA 显示为灰色
+  ) +
+  labs(
+    title = "Total communication strength (Outgoing + Incoming)",
+    x = "Infection Healthy", y = "Cell type", fill = "Total strength (z-score)"
+  ) +
+  theme_minimal(base_size = 13)
+
+  # 是否对fibroblast进行加粗
+  +
+  geom_tile(
+    data = subset(heat_df, CellType == "Fibroblast"),
+    color = "black", size = 0.6, fill = NA
+  )
+
+ggsave(c,file = "Heatmap.all_cells.Total_scaled.pdf",width = 6.5,height=4)
+
+
