@@ -1,0 +1,283 @@
+#### 20251229 将亚类细胞整合为大类并进行可视化 ####
+library(anndata)
+library(ggplot2)
+library(png)
+library(dplyr)
+library(Seurat)
+#### 1.更新metadata信息 ####
+ls()
+unique(d0@meta.data$celltype)
+unique(d1@meta.data$celltype)
+unique(d3@meta.data$celltype)
+unique(d5@meta.data$celltype)
+
+# 已有细胞类型
+
+# 分类
+Fibroblast<-c("Tnc-Cd34+","Fibro_adipocyte","Fibro_contraction","Fibro_antigen_pre","Tnc+Cd34-","S1_COL6A5+")
+Macrophage<-c("Macrophage1","Macrophage2")
+DC<-c("DC", "pDC")
+Neutrophil<-c( "Neutrophil")
+Cyciling_cell<-c("Cyciling_cell")
+B_cells<-c("NaïveB","Plasma")
+T_cells<-c("Cd4T","Cd8T", "NK","gama_delta_T")
+CC_1<-c( "pre_DCC", "DCC")
+Mid_CC<-c("Mid_CC","M_cell")
+CC_2<-c("pre_PCC", "PCC")
+Stem_TA<-c("Stem_TA")
+Goblets<-c("Goblet_0","Goblet_1","Goblet_2")
+EEC<-c("EEC")
+Endothelial<-c("Endothelial")
+
+# 1.先定义映射关系
+celltype_map <- list(
+  Fibroblast = c("Tnc-Cd34+", "Fibro_adipocyte", "Fibro_contraction",
+                 "Fibro_antigen_pre", "Tnc+Cd34-", "S1_COL6A5+"),
+  Macrophage = c("Macrophage1", "Macrophage2"),
+  DC = c("DC", "pDC"),
+  Neutrophil = c("Neutrophil"),
+  Cyciling_cell = c("Cyciling_cell"),
+  B_cells = c("NaïveB"),
+  Plasma<-c("Plasma"),
+  T_cells = c("Cd4T", "Cd8T", "NK", "gama_delta_T"),
+  Progenitor_CC = c("pre_DCC","pre_PCC"),
+  CC_1 = c( "DCC"),
+  Mid_CC = c("Mid_CC", "M_cell"),
+  CC_2 = c("PCC"),
+  Stem_TA = c("Stem_TA"),
+  Goblets = c("Goblet_0", "Goblet_1", "Goblet_2"),
+  EEC = c("EEC"),
+  Endothelial = c("Endothelial"))
+
+# 2.生成新All.celltype列(大类细胞)
+scRNA<-d0
+obj.list<-list(d0,d1,d3,d5)
+new.list<- list()
+
+for (i in 1:length(obj.list)) {
+  scRNA<-obj.list[[i]]
+  scRNA@meta.data$All.celltype <- NA
+  for (ct in names(celltype_map)) {
+    scRNA@meta.data$All.celltype[scRNA@meta.data$celltype %in% celltype_map[[ct]]] <- ct
+  }
+  new.list[[i]]<-scRNA
+}
+# 3.检查数据+保存
+with(scRNA@meta.data, table(scRNA@meta.data$celltype, scRNA@meta.data$All.celltype))
+
+outdir <- "整合为大类"
+dir.create(outdir, showWarnings = FALSE)
+names(new.list)<-c('d0','d1','d3','d5')
+for (nm in names(new.list)) {
+  saveRDS(new.list[[nm]],
+          file = file.path(outdir, paste0(nm, ".rds")))
+}
+
+
+#### 2.重新可视化 ####
+# 1.提取数据
+plot_df <- data.frame(
+  x = adata$obs$x,
+  y = adata$obs$y,
+  type = pred$pruned.labels
+)
+colnames(new.list[[1]]@meta.data)
+plot_df.d0 <- new.list[[1]]@meta.data[,c(4,5,7)]
+colnames(plot_df.d0)<-c( "x", "y","type")
+
+colnames(new.list[[2]]@meta.data)
+plot_df.d1 <- new.list[[2]]@meta.data[,c(4,5,7)]
+colnames(plot_df.d1)<-c( "x", "y","type")
+
+colnames(new.list[[3]]@meta.data)
+plot_df.d3 <- new.list[[3]]@meta.data[,c(4,5,7)]
+colnames(plot_df.d3)<-c( "x", "y","type")
+
+colnames(new.list[[4]]@meta.data)
+plot_df.d5 <- new.list[[4]]@meta.data[,c(4,5,7)]
+colnames(plot_df.d5)<-c( "x", "y","type")
+
+# 2.自定义颜色
+type <- c("Stem_TA","Progenitor_CC","CC_1","CC_2","Goblets",
+               "Macrophage","Plasma","B_cells","T_cells","Neutrophil",
+               "Fibroblast","EEC","Endothelial","Adipocyte",
+               "Mid_CC", "Cyciling_cell", "DC")
+target_cells<-c("CC_1","CC_2","Goblets","Macrophage","T_cells","Fibroblast")
+
+col <- c( "#bf0603","#f06152","#FF7F00","#FB9A99","#fddbc8",
+             "#6A3D9A","#33A02C","#76D7C4","#B2DF8A","#CAB2D6",
+             "#1F78B4","#A6CEE3","#B15928","#FDBF6F",
+             "#f15bb5", "#1B9E77", "#FFCC33") 
+names(col) <- type
+
+#### d1 ####
+# 3.读入背景图
+image <- readPNG("./细胞分割图片/day1_fluorescence_final_mask.png")
+image_height <- dim(image)[1]  # 获取原始高度（像素）
+image_width  <- dim(image)[2]  # 获取原始宽度（像素）
+
+# 4.可视化
+p <- ggplot() +
+  annotation_raster(
+    image, 
+    xmin = 0, xmax = image_width - 1, 
+    ymin = 0, ymax = image_height - 1
+  ) +
+  geom_point(
+    data = plot_df.d1,
+    aes(x = x, y = image_height - 1 - y, color = type),
+    size = 10, 
+    shape = 19
+  ) +
+  scale_color_manual(values = col) +
+  coord_cartesian(
+    xlim = c(0, image_width - 1),
+    ylim = c(0, image_height - 1),
+    expand = FALSE
+  ) +
+  theme_void() +  
+  theme(
+    legend.position = c(0.95, 0.05),  
+    legend.justification = c(1, 0),
+    legend.background = element_rect(fill = "white"),
+    # 增加图例键（颜色方块）的大小
+    legend.key.size = unit(0.4, "cm"), # 调整这个值以改变图例项的大小
+    # 增大图例文本大小
+    legend.text = element_text(size = 40), # 调整这个值以改变图例文本大小
+    plot.margin = margin(0, 0, 0, 0),  
+    panel.border = element_blank()
+  ) +
+  guides(color = guide_legend(
+    ncol = 2, 
+    title = "Cell Type",
+    override.aes = list(size = 40) # 调整这个值以改变图例标记的大小
+  ))
+
+# 输出图像
+png(
+  "./整合为大类/cell_type_plot_exact_size.d1.png",
+  width = image_width,    
+  height = image_height,  
+  res = 72,               
+  bg = "white"
+)
+dev.off()
+
+#### d3 ####
+# 3.读入背景图
+image <- readPNG("./细胞分割图片/day3_fluorescence_final_mask.png")
+image_height <- dim(image)[1]  # 获取原始高度（像素）
+image_width  <- dim(image)[2]  # 获取原始宽度（像素）
+
+# 4.可视化
+p <- ggplot() +
+  annotation_raster(
+    image, 
+    xmin = 0, xmax = image_width - 1, 
+    ymin = 0, ymax = image_height - 1
+  ) +
+  geom_point(
+    data = plot_df.d3,
+    aes(x = x, y = image_height - 1 - y, color = type),
+    size = 10, 
+    shape = 19
+  ) +
+  scale_color_manual(values = col) +
+  coord_cartesian(
+    xlim = c(0, image_width - 1),
+    ylim = c(0, image_height - 1),
+    expand = FALSE
+  ) +
+  theme_void() +  
+  theme(
+    legend.position = c(0.95, 0.05),  
+    legend.justification = c(1, 0),
+    legend.background = element_rect(fill = "white"),
+    # 增加图例键（颜色方块）的大小
+    legend.key.size = unit(0.4, "cm"), # 调整这个值以改变图例项的大小
+    # 增大图例文本大小
+    legend.text = element_text(size = 40), # 调整这个值以改变图例文本大小
+    plot.margin = margin(0, 0, 0, 0),  
+    panel.border = element_blank()
+  ) +
+  guides(color = guide_legend(
+    ncol = 2, 
+    title = "Cell Type",
+    override.aes = list(size = 40) # 调整这个值以改变图例标记的大小
+  ))
+
+# 输出图像
+png(
+  "./整合为大类/cell_type_plot_exact_size.d3.png",
+  width = image_width,    
+  height = image_height,  
+  res = 72,               
+  bg = "white"
+)
+dev.off()
+
+#### d5 ####
+# 3.读入背景图
+image <- readPNG("./细胞分割图片/day5_fluorescence_final_mask.png")
+image_height <- dim(image)[1]  # 获取原始高度（像素）
+image_width  <- dim(image)[2]  # 获取原始宽度（像素）
+
+# 4.可视化
+p <- ggplot() +
+  annotation_raster(
+    image, 
+    xmin = 0, xmax = image_width - 1, 
+    ymin = 0, ymax = image_height - 1
+  ) +
+  geom_point(
+    data = plot_df.d5,
+    aes(x = x, y = image_height - 1 - y, color = type),
+    size = 10, 
+    shape = 19
+  ) +
+  scale_color_manual(values = col) +
+  coord_cartesian(
+    xlim = c(0, image_width - 1),
+    ylim = c(0, image_height - 1),
+    expand = FALSE
+  ) +
+  theme_void() +  
+  theme(
+    legend.position = c(0.95, 0.05),  
+    legend.justification = c(1, 0),
+    legend.background = element_rect(fill = "white"),
+    # 增加图例键（颜色方块）的大小
+    legend.key.size = unit(0.4, "cm"), # 调整这个值以改变图例项的大小
+    # 增大图例文本大小
+    legend.text = element_text(size = 40), # 调整这个值以改变图例文本大小
+    plot.margin = margin(0, 0, 0, 0),  
+    panel.border = element_blank()
+  ) +
+  guides(color = guide_legend(
+    ncol = 2, 
+    title = "Cell Type",
+    override.aes = list(size = 40) # 调整这个值以改变图例标记的大小
+  ))
+
+# 输出图像
+png(
+  "./整合为大类/cell_type_plot_exact_size.d5.png",
+  width = image_width,    
+  height = image_height,  
+  res = 72,               
+  bg = "white"
+)
+dev.off()
+
+
+
+
+
+
+
+
+
+
+
+
+
