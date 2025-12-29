@@ -1,0 +1,249 @@
+#### 20251229 计算特定区域内Fibroblast距离所有细胞的距离 ####
+
+library(ggplot2)
+library(png)
+library(dplyr)
+library(Seurat)
+library(tidyr)
+library(ggpubr)
+
+d1 <- readRDS("G:/课题二 成纤维细胞相关/Results/3.空间定位/细胞分割_ours/亚类注释/整合为大类/d1.rds")
+setwd('G:/课题二 成纤维细胞相关/Results/3.空间定位/细胞分割_ours/亚类注释/整合为大类/计算距离')
+
+#### 1.extract the region of interested ------------------------------------------------------------------------------------------------------------------------------
+# a.小范围
+左上：x:16556, y:6527
+右下：x:17099, y:7040
+X轴范围：16556-17099
+Y轴范围：6527-7040
+# b.稍大范围
+左上：x:16354, y:6505
+右下：x:17145, y:7270
+X轴范围：16354-17145
+Y轴范围：6505-7270
+
+data<-d1@meta.data
+range(data$x, na.rm = TRUE)
+range(data$y, na.rm = TRUE)
+dim(data)  # 157577      7
+subset_df <- data[data$x >= 16354 & data$x <= 17145 & data$y >= 6505  & data$y <= 7270,]
+dim(subset_df)  # 40358     7； 40649     7
+subset_df<-na.omit(subset_df)  # 401   7； 690   7
+unique(subset_df$All.celltype)
+
+
+#### 2.caculate distance between fibroblast and others ------------------------------------------------------------------------------------------------------------------------------
+# ✅ 一、准备数据
+# 只看Fibroblast, CC1,CC2,Macrophage细胞
+colnames(subset_df)
+df<-subset_df[subset_df$All.celltype %in% c("Fibroblast","Macrophage","CC_1","CC_2"),]
+df<-df[,c(4,5,7)]
+
+# ✅ 二、拆分 Fibroblast 与 非 Fibroblast
+fibro_df <- df[df$All.celltype == "Fibroblast", ]
+other_df <- df[df$All.celltype != "Fibroblast", ]
+
+# ✅ 三、计算距离（核心）
+# 提取坐标
+fibro_xy <- as.matrix(fibro_df[, c("x", "y")])
+other_xy <- as.matrix(other_df[, c("x", "y")])
+
+# 计算距离矩阵（Fibroblast × Other）
+# dist():计算所有点之间的欧几里得距离
+# as.matrix(dist(...)):将距离对象转换为完整的n×n 对称矩阵；从而可以通过行列索引直接访问任意两点间的距离
+dist_mat <- as.matrix(dist(rbind(fibro_xy, other_xy)))
+dim(dist_mat)  # 227 227
+# 取出 fibro -> other 的部分
+n_fibro <- nrow(fibro_xy)
+n_other <- nrow(other_xy)
+
+fibro_to_other_dist <- dist_mat[1:n_fibro, (n_fibro + 1):(n_fibro + n_other)]
+
+# ✅ 四、整理成长表（tidy 格式，推荐）
+dist_df <- as.data.frame(fibro_to_other_dist)
+# colnames(dist_df) <- paste0("cell_", seq_len(ncol(dist_df)))
+
+# 距离矩阵的本质：行（Fibro_id）,列（target_id），单元格：他们的距离
+dim(dist_df)  # 129  98
+
+dist_long <- dist_df %>%
+  mutate(Fibro_id = rownames(fibro_df)) %>%  # mutate():添加一个新列Fibro_id !!!(pivot_longer()不能操作“行名”，只能操作列名)
+  pivot_longer(
+    cols = -Fibro_id,  # 筛选除了Fibro_id之外的所有列
+    names_to = "target_id",  # 将列名换为新列的数值
+    values_to = "distance"   # 数值叫做distance
+  )
+
+dim(dist_long)  # 12642     3
+
+# 加上 target 细胞类型
+### 下面这个代码的错误！！！
+# dist_long$target_type <- rep(other_df$All.celltype, each = nrow(fibro_df))
+dist_long$target_type <- NULL
+other_df$target_id<-rownames(other_df)
+
+dist_long <- dist_long %>%
+  left_join(
+    other_df %>% select(target_id, All.celltype),
+    by = "target_id"
+  ) %>%
+  rename(target_type = All.celltype)
+
+
+dist_long$sender<-'Fibroblast'
+colnames(dist_long)
+
+# ✅ 七、如果你只想要「平均距离」
+mean_dist_by_type <- dist_long %>%
+  group_by(Fibro_id, target_type) %>%
+  summarise(
+    mean_dist = mean(distance), 
+    n_targets = n(),
+    .groups = "drop")
+table(mean_dist_by_type$target_type)
+
+#### 3.Visualization ------------------------------------------------------------------------------------------------------------------------------
+type <- c("CC_1","CC_2","Macrophage")
+col <- c( "#FF7F00", "#FB9A99", "#6A3D9A") 
+names(col) <- type
+
+comparision<-list(c("Macrophage","CC_1"),
+                  c("Macrophage","CC_2"))
+dist_long$target_type <- factor(dist_long$target_type, levels = c("Macrophage","CC_1","CC_2"))
+col_named <- setNames(col, c("CC_1","CC_2","Macrophage"))  # 你给的 col 顺序是 CC_1,CC_2,Macrophage
+
+#### 1. 小提琴展示距离分布
+# 1️⃣ 画距离分布 violin plot
+p<-ggplot(dist_long, aes(x = target_type, y = distance, fill = target_type)) +
+  geom_violin(scale = "width", trim = TRUE) +
+  # 把每个点画出来：jitter（每个点一个位置偏移，避免重叠）
+  geom_point(
+    color = "grey",
+    position = position_jitter(width = 0.15, height = 0),
+    size = 0.6,
+    alpha = 0.1
+  ) +
+  # ⭐ 平均值点
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    shape = 23,        # 菱形
+    size = 3,
+    fill = "grey",
+    color = "black"
+  ) +
+  scale_fill_manual(values = col_named) +
+  #scale_color_manual(values = col_named) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Target cell type",
+    y = "Distance to Fibroblast"
+  )+
+  # 显著性检验与标注（默认 Wilcoxon；你也可以改成 t.test）
+  stat_compare_means(
+    comparisons = comparision,
+    method = "wilcox.test",
+    label = "p.signif"
+  )
+
+#2️⃣ 如果你只想看“最近距离”分布(更有生物意义)
+# 每个 Fibro 到每一类 target 细胞的最近距离
+nearest_dist <- dist_long %>%
+  group_by(Fibro_id, target_type) %>%  # 将数据按照这两列进行分组
+  summarise(min_dist = min(distance), .groups = "drop") # 寻找其中最近的一个
+
+b<-ggplot(nearest_dist, aes(x = target_type, y = min_dist, fill = target_type)) +
+  geom_violin(scale = "width", trim = TRUE) +
+  # 把每个点画出来：jitter（每个点一个位置偏移，避免重叠）
+  geom_point(
+    color = "grey",
+    position = position_jitter(width = 0.15, height = 0),
+    size = 0.6,
+    alpha = 0.5
+  ) +
+  # ⭐ 平均值点
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    shape = 23,        # 菱形
+    size = 3,
+    fill = "grey",
+    color = "black"
+  ) +
+  scale_fill_manual(values = col) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Target cell type",
+    y = "Nearest distance to Fibroblast"
+  )+
+  # 显著性检验与标注（默认 Wilcoxon；你也可以改成 t.test）
+  stat_compare_means(
+    comparisons = comparision,
+    method = "wilcox.test",
+    label = "p.signif"
+  )
+
+#### 2. 最近邻细胞类型比例
+# 1️⃣ 计算每个 Fibroblast 的最近邻(计算每个Fibro_id,在它所有的target细胞中条算出最近的那个)
+nearest_neighbor <- dist_long %>%
+  group_by(Fibro_id) %>%
+  slice_min(order_by = distance,  # 按照距离从小到大
+            n = 1,  # 只取每组中的最小距离(最近点)
+            with_ties = FALSE  # 如果有多个距离相等的最近点，只去第一个
+            )
+
+# 2️⃣ 统计最近邻的细胞类型比例
+nn_summary <- nearest_neighbor %>%
+  count(target_type) %>%
+  mutate(freq = n / sum(n))
+
+# 3️⃣ 可视化（柱状图）
+d<-ggplot(nn_summary, aes(x = target_type, y = freq, fill = target_type)) +
+  geom_col() +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  scale_fill_manual(values = col) +
+  labs(
+    x = "Nearest neighbor cell type",
+    y = "Proportion"
+  )
+pdf(file = 'distance.pdf',width = 3.5,height = 4)
+p
+b
+d
+dev.off()
+
+#### 3.通过将对应区域的像素提取，确定所选区域的准确性 ####
+image <- readPNG("G:/课题二 成纤维细胞相关/Results/3.空间定位/细胞分割_ours/亚类注释/整合为大类/cell_type_plot_exact_size.d1.png")
+image_height <- dim(image)[1]  # 获取原始高度（像素）
+image_width  <- dim(image)[2]  # 获取原始宽度（像素）
+
+# b.稍大范围
+# X轴范围：16354-17145
+# Y轴范围：6505-7270
+
+x_min <- 16354
+x_max <- 17145
+
+y_min <- 6505
+y_max <- 7270
+
+sub_image <- image[y_min:y_max, x_min:x_max, ]
+plot(as.raster(sub_image))
+# 7*7 
+# region_of_interested.pdf
+
+
+
+
