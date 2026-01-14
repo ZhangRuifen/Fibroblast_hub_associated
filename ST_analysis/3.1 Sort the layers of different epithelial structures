@@ -1,0 +1,36 @@
+library(magick)
+library(Matrix)
+library(png)
+library(imager)
+library(zeallot)
+library(magrittr)
+library(dplyr)
+library(dbscan)
+library(LearnGeom)
+library(pbmcapply)
+library(parallel)
+library(ggplot2)
+library(grid)
+
+setwd("/data/home/rfzhang/project/ST/distace_caculate/d1")
+object_day1 <- readRDS("./d1.new.rds")
+
+# 作图背景
+png_img <- readPNG("./d1_cell_type_plot_exact_size.png")
+
+### 1. 提取不同层的上皮层（mask 图层）------------------------------------------------
+base.layers <- c("./new_图层1.png",
+                 "./1new_图层 2.png",
+                 "./1new_图层 3.png",
+                 "./new_图层4.png")
+
+xy.all <- do.call(rbind, lapply(seq_along(base.layers), function(i) {
+  im <- base.layers[[i]]
+  x <- image_read(im) %>% as.raster()  # 读入png，在变成baseR的"raster"对象，每个像素都是一个颜色字符串
+  xy <- as.data.frame(which( x == "#f80808ff", arr.ind = T))
+  xy$layer <- i  # 给每个像素标注他来自第几个图层
+  return(xy)
+}))
+
+# 给基准像素一个顺序索引，用于后面 expand.range
+saveRDS(xy.all,file = 'new.xy.all.rds')
