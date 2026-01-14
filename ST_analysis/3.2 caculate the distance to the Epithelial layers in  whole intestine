@@ -1,0 +1,235 @@
+library(magick)
+library(Matrix)
+library(png)
+library(imager)
+library(zeallot)
+library(magrittr)
+library(dplyr)
+library(dbscan)
+library(LearnGeom)
+library(pbmcapply)
+library(parallel)
+library(ggplot2)
+library(grid)
+
+setwd("/data/home/rfzhang/project/ST/distace_caculate/d5/verify")
+object_day1 <- readRDS("d5.new.rds")
+
+# 作图背景
+png_img <- readPNG("day5_fluorescence_final_mask.png")
+
+### 1. 提取不同层的上皮层（mask 图层）------------------------------------------------
+xy.all <- readRDS("/data/home/rfzhang/project/ST/distace_caculate/d5/verify/day5_xy.all.large_path.rds")
+xy.all<-xy.all[,-4]
+### 3. 定义一系列几何辅助函数（角度、朝向、局部线段）------------------------------------------------
+# 1）调整坐标到相对于某个点 P 的局部坐标系
+adjust.coords <- function(x, y, P){
+  avg <- c(mean(c(x[1], y[1])), mean(c(x[2], y[2])))
+  df  <- (P - avg)
+  x_new <- x - df
+  y_new <- y - df
+  c(x_new, y_new)
+}
+# 2）叉积(二维向量)：判断点 P 相对于线段 x→y 的左右侧
+sider <- function(x, y, P) {
+  (P[1] - x[1])*(y[2] - x[2]) - (P[2] - x[2])*(y[1] - x[1])
+}  
+# 3）计算角度
+angle <- function(x, y, P){
+  Angle(A = P,
+        B = c(mean(c(x[1], y[1])), mean(c(x[2], y[2]))),
+        C = y)
+}
+# 4）带符号角度
+sign_angle <- function(x, y, P) {
+  angle(x, y, P) * sign(sider(x, y, P))  # sign取正负号
+}
+# 5）扩展索引范围
+expand.range <- function(x, exp.factor = 5, maxval = 1e4) {
+  c(max(1, x - exp.factor), min(x + exp.factor, maxval))
+}
+
+### 4. 提取 spot 坐标（set1）和基准像素坐标（set2）------------------------------------------------
+# set1:不同spot的坐标信息；
+d1_table <- object_day1@meta.data
+colnames(d1_table)
+set1     <- d1_table[, c("x", "y", 'celltype')]             # 172851 × 3
+target_types <- c('Fibroblast1','Fibroblast2','Fibroblast3','Trophocyte1','Trophocyte2',
+                  'Telocyte','Pericyte','Myfibroblast', 'Mono_Ly6c2', 'Mac_Cd14',
+                  'Mac_Irf7','Mac_Cd163','Mono_Ccr2','Mono_Lcn','Mac_Klf2')
+
+set1<-set1[set1$celltype %in% target_types,]   # 780, 3
+set1<-set1[,c(1:2)]
+# 将Fibroblast亚类过滤出来
+set1_mat <- as.matrix(set1) # 780,2
+
+# set2:不同layers的坐标信息； xy.all[, 2:1] 把 (row, col) 变成 (x, y)
+set2_mat <- as.matrix(xy.all[, c("col", "row")])  # 260824 × 2
+
+### 5. 并行设置：从 PBS 读取核数，做个上限------------------------------------------------
+n_cores_env <- Sys.getenv("PBS_NP")
+if (nchar(n_cores_env) > 0) {
+  n_cores <- as.integer(n_cores_env)
+} else {
+  n_cores <- parallel::detectCores()
+}
+n_cores <- n_cores
+cat("Using", n_cores, "cores/n")
+
+### 6. 对每个 spot 并行,筛选最适合的基准点！：现算距离 + 角度筛选（不生成全局 dists 矩阵）------------------------------------------------
+spots.list <- pbmclapply(
+  seq_len(nrow(set1_mat)),     # 每个 i 是一个 spot index (要迭代的向量/列表)
+  
+  # 要应用的函数
+  function(i) {         
+    P <- set1_mat[i, ]         # 每次取一个 spot 坐标 (px, py)
+    
+    # 6.1 计算该 spot 到所有Epithelial layers 像素点的距离向量 (长度 = n_base)
+    # 直接用矩阵运算：每行是 set2_mat 的一个点
+    dx <- set2_mat[, 1] - P[1]  # colnames(set2_mat): "col" "row"
+    dy <- set2_mat[, 2] - P[2]
+    d_vec <- sqrt(dx*dx + dy*dy) # 依次计算不同Epithelial layers 像素点的距离
+    
+    # 初筛：只保留 800 像素以内的基准点 (默认800像素点范围内的都是属于同一层的)
+    idx <- which(d_vec < 3000)
+    if (length(idx) == 0) return(NULL)
+    dists.subset <- d_vec[idx]
+    names(dists.subset) <- idx   # 得到了一个特定的spot点P与所有上皮层的像素距离
+    
+    # 6.2 角度方向筛选: 判断 spot 是否落在某条 epithelial layer 的内侧
+    checks <- vapply(names(dists.subset), function(b) {
+      b <- as.integer(b)
+      
+      xs_idx <- expand.range(
+        xy.all[b, "ord"] %>% as.numeric(),
+        exp.factor = 10,
+        maxval    = nrow(xy.all)
+      )
+      xs <- xy.all[xs_idx, ]  # 基准线局部两个点
+      
+      # 极端情况下 xs[1,] 和 xs[2,] 可能是同一个点，先排除掉
+      if (nrow(xs) < 2 ||
+          (xs[1, "col"] == xs[2, "col"] && xs[1, "row"] == xs[2, "row"])) {
+        return(FALSE)
+      }
+      
+      # xs[1,], xs[2,]：基准层局部的两个像素点，形成一个局部切线；P：当前 spot；
+      # 调整线段方向；统一方向，为了消除上下左右方向造成的符号混乱。
+      ls <- adjust.coords(
+        x = as.numeric(xs[1, c("col", "row")]),
+        y = as.numeric(xs[2, c("col", "row")]),
+        P = as.numeric(P)
+      )
+      x_loc <- ls[1:2]
+      y_loc <- ls[3:4]
+      
+      ## === 新增：把图像坐标系转换为数学坐标系 ===
+      x_math <- c(x_loc[1], -x_loc[2])          # x 不变，y 取负
+      y_math <- c(y_loc[1], -y_loc[2])
+      P_math <- c(P[1],      -P[2])
+      
+      # 在“数学坐标系”下计算角度
+      ang <- sign_angle(x = x_math, y = y_math, P = P_math)
+      
+      
+      # 正数：确保在spot点在上皮层内侧；
+      # ang <- sign_angle(x = x_loc, y = y_loc, P = as.numeric(P))
+      
+      # 角度如果是 NA/NaN，直接视为不符合条件
+      if (is.na(ang) || is.nan(ang)) {
+        return(FALSE)
+      }
+      
+      -45 > ang && ang > -135  # 45 < ang && ang < 135
+    }, logical(1))
+    
+    if (!any(checks)) return(NULL)
+    
+    bl.subset <- dists.subset[checks]
+    
+    data.frame(
+      dist = bl.subset,
+      id   = as.integer(names(bl.subset)),  # 对应 xy.all$ord
+      spot = i               # 对应 set1 第几行
+    )
+  },
+  mc.cores = n_cores  # 并行核心数
+)
+
+spots.list <- do.call(rbind, spots.list)
+saveRDS(spots.list, "spots.list.rds")
+
+# 7. 每个 spot 只保留最近基准点---------------------------------------
+spots.summarized <- spots.list %>%
+  group_by(spot) %>%
+  slice_min(order_by = dist, n = 1, with_ties = FALSE)
+dim(spots.summarized)  # 93360     3
+
+# # 8. 合并坐标信息---------------------------------------
+g <- merge(xy.all, spots.summarized, by.x = "ord", by.y = "id", all = TRUE)
+g <- cbind(g, set1[g$spot, ])
+g <- na.omit(g)
+
+# 9. 叠加到 HE 图像上---------------------------------------
+im <- image_read("./day5_fluorescence_final_mask.png") %>% as.raster()
+# 使用grid图形系统创建了一个栅格图形对象
+gr <- grid::rasterGrob(im, 
+                       width = unit(1, "npc"),  # 100%宽度
+                       height = unit(1, "npc"),  # 100%高度
+                       interpolate = TRUE)
+gr
+
+pdf(file = "ord.3000.math.figure1.png", width = 8, height = 8)
+# red: 上皮层的信息
+# blue: spot点的信息
+# dist: 用于判断最小距离
+ggplot() +
+  annotation_custom(gr, -Inf, Inf, -Inf, Inf) +
+  geom_point(data = g, aes(col, dim(im)[1] - row),  
+             color = "red", size = 0.5) +
+  geom_point(data = g, aes(x, dim(im)[1] - y),
+             color = "blue", shape = 21, size = 1) +
+  geom_segment(
+    data = g,
+    aes(x = col, xend = x,
+        y = dim(im)[1] - row,
+        yend = dim(im)[1] - y),
+    color = "white", size = 0.1
+  ) +
+  theme_void() +
+  scale_x_continuous(limits = c(0, dim(im)[2]), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, dim(im)[1]), expand = c(0, 0))
+dev.off()
+
+# 10.小提琴图：可视化距离 ###----------------------------------
+### 1.匹配细胞类型
+d1_table <- object_day1@meta.data
+set1     <- d1_table[, c("x", "y")] 
+colnames(d1_table)
+# 把细胞类型映射到 g 中
+g$cell_type <- d1_table$celltype[ g$spot ]
+
+### 2.可视化
+# 如果细胞类型太多，可以先过滤/重命名一下，这里直接用全部
+#df_violin <- g %>% filter(!is.na(cell_type))
+
+df_plot <- g %>%
+  filter(cell_type %in% target_types)
+
+pdf("ord.mean.dist_violin_selected_celltypes.pdf", width = 15, height = 5)
+ggplot(df_plot, aes(x = cell_type, y = dist, fill = cell_type)) +
+  geom_violin(scale = "width", trim = TRUE) +
+  geom_jitter(width = 0.15, linewidth = 0.3, alpha = 0.4) +
+  stat_summary(fun = "mean", geom = "point", linewidth = 1, color = "black") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Cell type",
+    y = "Min distance to epithelial layer (pixels)"
+  )
+dev.off()
+
+
