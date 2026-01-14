@@ -12,15 +12,15 @@ library(parallel)
 library(ggplot2)
 library(grid)
 
-setwd("/data/home/rfzhang/project/ST/distace_caculate/d5/verify")
-object_day1 <- readRDS("d5.new.rds")
+setwd("/data/home/rfzhang/project/ST/distace_caculate/d1")
+object_day1 <- readRDS("d1.new.rds")
 
 # 作图背景
-png_img <- readPNG("day5_fluorescence_final_mask.png")
+png_img <- readPNG("day1_fluorescence_final_mask.png")
 
 ### 1. 提取不同层的上皮层（mask 图层）------------------------------------------------
-xy.all <- readRDS("/data/home/rfzhang/project/ST/distace_caculate/d5/verify/day5_xy.all.large_path.rds")
-xy.all<-xy.all[,-4]
+xy.all <- readRDS("day1_xy.order.rds")
+xy.all<-xy.all[,-4]  # 删除id列
 ### 3. 定义一系列几何辅助函数（角度、朝向、局部线段）------------------------------------------------
 # 1）调整坐标到相对于某个点 P 的局部坐标系
 adjust.coords <- function(x, y, P){
@@ -91,7 +91,7 @@ spots.list <- pbmclapply(
     d_vec <- sqrt(dx*dx + dy*dy) # 依次计算不同Epithelial layers 像素点的距离
     
     # 初筛：只保留 800 像素以内的基准点 (默认800像素点范围内的都是属于同一层的)
-    idx <- which(d_vec < 3000)
+    idx <- which(d_vec < 3500)
     if (length(idx) == 0) return(NULL)
     dists.subset <- d_vec[idx]
     names(dists.subset) <- idx   # 得到了一个特定的spot点P与所有上皮层的像素距离
@@ -171,7 +171,7 @@ g <- cbind(g, set1[g$spot, ])
 g <- na.omit(g)
 
 # 9. 叠加到 HE 图像上---------------------------------------
-im <- image_read("./day5_fluorescence_final_mask.png") %>% as.raster()
+im <- image_read("./day1_fluorescence_final_mask.png") %>% as.raster()
 # 使用grid图形系统创建了一个栅格图形对象
 gr <- grid::rasterGrob(im, 
                        width = unit(1, "npc"),  # 100%宽度
@@ -179,7 +179,7 @@ gr <- grid::rasterGrob(im,
                        interpolate = TRUE)
 gr
 
-pdf(file = "ord.3000.math.figure1.png", width = 8, height = 8)
+pdf(file = "ord.3500.math.figure1.png", width = 8, height = 8)
 # red: 上皮层的信息
 # blue: spot点的信息
 # dist: 用于判断最小距离
@@ -210,9 +210,6 @@ colnames(d1_table)
 g$cell_type <- d1_table$celltype[ g$spot ]
 
 ### 2.可视化
-# 如果细胞类型太多，可以先过滤/重命名一下，这里直接用全部
-#df_violin <- g %>% filter(!is.na(cell_type))
-
 df_plot <- g %>%
   filter(cell_type %in% target_types)
 
@@ -232,4 +229,20 @@ ggplot(df_plot, aes(x = cell_type, y = dist, fill = cell_type)) +
   )
 dev.off()
 
+
+pdf("ord.median.dist_violin_selected_celltypes.pdf", width = 15, height = 5)
+ggplot(df_plot, aes(x = cell_type, y = dist, fill = cell_type)) +
+  geom_violin(scale = "width", trim = TRUE) +
+  geom_jitter(width = 0.15, linewidth = 0.3, alpha = 0.4) +
+  stat_summary(fun = "median", geom = "point", linewidth = 1, color = "black") +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  ) +
+  labs(
+    x = "Cell type",
+    y = "Min distance to epithelial layer (pixels)"
+  )
+dev.off()
 
