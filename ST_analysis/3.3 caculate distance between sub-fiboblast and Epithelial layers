@@ -1,0 +1,128 @@
+#### 202601014 不同成纤维细胞亚型的空间垂直分布情况
+
+library(ggpubr)
+
+setwd('G:/课题二 成纤维细胞相关/Results/3.空间定位/细胞分割_ours/3.亚类注释/3.距离计算/d0')
+
+# d0, d1
+# 1. 读取计算后的 ST矩阵spot，Epithelial layers上皮层像素dists矩阵-----------------------------------------
+# A. 读取上皮层信息
+xy.all <- readRDS("day0_xy.order.rds")
+xy.all<-xy.all[,-4]  # 删除id列
+
+# B. 读取筛选所属层的spot信息
+spots.list <- readRDS("spots.list.rds")
+spots.summarized <- spots.list %>%
+  group_by(spot) %>%
+  slice_min(order_by = dist, n = 1, with_ties = FALSE)
+dim(spots.summarized) 
+rm(spots.list)
+colnames(spots.summarized)
+
+# "dist":spot与对应上皮id的距离；  
+# "id":对应距离最近上皮层的像素位置索引；   
+# "spot":spot的编号(set1的行号)
+
+# C. 读取spot对应的坐标信息
+object_day1 <- readRDS("d0.new.rds")
+d1_table <- object_day1@meta.data
+colnames(d1_table)
+set1     <- d1_table[, c("x", "y", 'celltype')]             # 172851 × 3
+target_types <- c('Fibroblast1','Fibroblast2','Fibroblast3','Trophocyte1','Trophocyte2',
+                  'Telocyte','Pericyte','Myfibroblast', 'Mono_Ly6c2', 'Mac_Cd14',
+                  'Mac_Irf7','Mac_Cd163','Mono_Ccr2','Mono_Lcn','Mac_Klf2')
+set1<-set1[set1$celltype %in% target_types,]   # 780, 3
+
+# set1<-set1[,c(1:2)]
+
+# 2.合并数据-----------------------------------------
+# set1是用来计算spot的table; 这里的g表格行数长，是因为有很多上皮层index与spot不是一一对应的，
+# 而是多个spot点有可能对应一个上皮index,而上皮index还保留未被匹配的，因此比spot的table, set1长度要长！！！
+g <- merge(xy.all, spots.summarized, by.x = "ord", by.y = "id", all = TRUE)
+
+# Aim：将与上皮层合并后的table添加set1中的坐标信息; dim(set1)：25566  3
+g <- cbind(g, set1[g$spot, ])  # g$spot：spot所在的行数，将set1按照g中spot的行数将对应的坐标信息进行提取并合并
+g <- na.omit(g)
+colnames(g)
+
+# 3. 提取感兴趣的细胞类型-----------------------------------------
+unique(g$celltype)  
+# "Telocyte"     "Trophocyte2"  "Pericyte"     "Trophocyte1"  "Fibroblast1"  "Mac_Cd14"     "Myfibroblast"
+# "Mono_Ccr2"    "Fibroblast3"  "Fibroblast2"  "Mac_Irf7"     "Mac_Cd163"    "Mono_Ly6c2"  
+target_types<-c("Fibroblast1","Fibroblast2", "Fibroblast3","Trophocyte1","Trophocyte2"
+                #,"Myfibroblast","Telocyte","Pericyte"
+)
+df_plot <- g %>%
+  filter(celltype %in% target_types)
+colnames(df_plot)
+# "ord"      "row"      "col"      "layer"    "dist"     "spot"     "x"        "y"        "celltype"
+
+# 4. 可视化-----------------------------------------
+my_colors <- c(
+  "Fibroblast1" = "#B3DE69",
+  "Fibroblast2" = "#FB9A99",
+  "Fibroblast3" = "#FF7F00",
+  "Trophocyte1" = "#1F78B4",
+  "Trophocyte2" = "#6A3D9A"
+)
+my_comparisons <- list(
+  c("Fibroblast1", "Trophocyte1"),
+  c("Fibroblast1", "Trophocyte2"),
+  c("Fibroblast2", "Trophocyte1"),
+  c("Fibroblast2", "Trophocyte2")
+  #,c("Fibroblast3", "Trophocyte1"),
+  #c("Fibroblast3", "Trophocyte2")
+)
+
+y_max <- max(df_plot$dist, na.rm = TRUE)
+p <- ggplot(df_plot, aes(x = celltype, y = dist)) +
+  ggtitle("Day 0: The distance to Epithelial layer") +         # ← 添加标题
+  # 箱线图：无填充，黑色边框
+  geom_boxplot(
+    width = 0.55,
+    color = "black",
+    fill  = "white",
+    outlier.shape = NA,
+    linewidth = 0.4) +
+  # 抖动点：轻微抖动，半透明，小点
+  geom_jitter(
+    aes(color = celltype),
+    width = 0.15,
+    size  = 0.3,
+    alpha = 0.4) +
+  # 中位数横线再强调一下（可选，已经有 boxplot 的中位数线了，这里让它略粗）
+  stat_summary(
+    fun   = median,
+    geom  = "crossbar",
+    width = 0.4,
+    color = "black",
+    linewidth = 0.5 ) +
+  # 颜色：只给点上色，箱线图保持白底黑框，更接近顶刊风格
+  scale_color_manual(values = my_colors) +
+  labs(
+    x = "Cell type",
+    y = "Min distance to epithelial layer (pixels)") +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    legend.position  = "none",
+    axis.line        = element_line(linewidth = 0.4),
+    axis.ticks       = element_line(linewidth = 0.4)) +
+  # 组间 pairwise 显差（你已有 my_comparisons）
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method      = "wilcox.test",
+    label       = "p.signif",
+    tip.length  = 0.01
+  )+ 
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+p
+ggsave(p,file = 'fibroblast_亚型.distance.pdf',width = 3.5,height = 5)
+
+
+
+
